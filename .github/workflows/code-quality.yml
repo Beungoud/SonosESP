@@ -168,6 +168,7 @@ jobs:
             -D ARDUINO \
             -D CONFIG_SPIRAM \
             -I include \
+            -i src/fonts -i src/square/fonts \
             src/ include/ \
             2> cppcheck.xml || true
 

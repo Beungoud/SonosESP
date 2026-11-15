@@ -44,6 +44,7 @@ LV_FONT_DECLARE(font_sqi_44)
 #define SQ_TEXT      0xFFF7EA
 #define SQ_MUTED     0xB7B1E3
 #define SQ_PINK      0xFF7AB6   // Lecture
+#define SQ_PINK_GLOW 0xB84A80   // shadow under the pink play button
 #define SQ_ORANGE    0xFF9A3C   // Chercher
 #define SQ_YELLOW    0xFFD23F   // Favoris
 #define SQ_MINT      0x3BE0A0   // Spotify
