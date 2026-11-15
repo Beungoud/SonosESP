@@ -10,17 +10,27 @@ Maquettes : canevas « Sonos carré 480 », pages « Carré 4″ (S3) » et
 
 ## Appli
 
-- [ ] **Mise en veille** : baisse de luminosité après inactivité, mode nuit,
-      réveil au toucher. L'écran carré reste aujourd'hui à pleine luminosité
-      en permanence. Le firmware P4 classique a déjà cette logique
-      (`checkAutoDim`, `nightNow` dans `ui_handlers.cpp`).
-- [ ] **Écran de premier démarrage** (maquette « Premier démarrage ») : le
-      panneau ouvre directement l'écran Wi-Fi, puis cherche enceintes,
-      comptes et favoris sans rien montrer.
-- [ ] **Mises à jour par Wi-Fi (OTA)** pour l'écran carré : il faut encore le
-      câble USB.
-- [ ] **Vignettes en flash** : les pochettes des favoris sont retéléchargées à
-      chaque démarrage (quelques secondes de visuels de remplacement).
+Fait le 15 novembre 2026. Compilé pour les trois builds et essayé sur le
+panneau carré (veille, réveil avalé, pochettes relues depuis la flash,
+vérification OTA sur `Beungoud/SonosESP`). **Pas encore essayé** : une vraie
+installation OTA (le fork n'a pas encore de release), le premier démarrage
+sur un panneau vierge, et tout le build enfants sur le P4 :
+
+- [x] **Mise en veille** (`sq_sleep.cpp`, écran Veille dans Réglages) : baisse
+      après 30 s / 1 min / 5 min, mode nuit avec heures et écran éteint ou
+      veilleuse. Mêmes clés NVS que le P4 classique. Le toucher qui réveille un
+      écran presque noir n'appuie sur rien.
+- [x] **Écran de premier démarrage** (`sq_setup.cpp`) : après le Wi-Fi,
+      enceintes, comptes Spotify, favoris, puis pochettes gardées en flash.
+      Une seule fois (clé NVS `sq_setup_done`).
+- [x] **Mises à jour par Wi-Fi (OTA)** (`sq_ota.cpp`, écran Mise à jour) :
+      releases GitHub de `GITHUB_REPO`, canaux stable et d'essai. L'installation
+      redémarre le panneau et flashe au démarrage, avant tout le reste. Assets
+      attendus : `firmware-square.bin`, `firmware-4inch-kids.bin`,
+      `firmware-4inch-r3-kids.bin` (à ajouter aux workflows de release).
+- [x] **Vignettes en flash** (`sq_art.cpp`) : les pochettes des favoris sont
+      gardées décodées dans LittleFS (`/art/<clé>.565`) et supprimées quand le
+      favori disparaît.
 
 ## Défauts connus
 

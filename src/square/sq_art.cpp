@@ -10,6 +10,7 @@
 #include "ui_common.h"
 #include "ui_network_guard.h"
 #include <WiFiClientSecure.h>
+#include <LittleFS.h>
 #include <esp_heap_caps.h>
 
 #undef INTELSHORT
@@ -35,6 +36,7 @@ volatile uint32_t sq_art_version = 0;
 struct ArtSlot {
     uint32_t       key;        // hash(url) ^ size
     int            size;
+    bool           keep;       // also kept in flash (favourites)
     uint32_t       last_use;   // millis() of the last get
     uint32_t       retry_ms;   // FAILED only: when to try again, 0 = never
     enum { EMPTY, QUEUED, READY, FAILED } state;
@@ -45,6 +47,7 @@ struct ArtSlot {
 struct ArtReq {
     uint32_t key;
     int      size;
+    bool     keep;
     char     url[384];
 };
 
@@ -73,12 +76,96 @@ static ArtSlot* slotFor(uint32_t key) {
     return victim;
 }
 
-const lv_image_dsc_t* sqArtGet(const char* url, int size) {
+// ── Flash copies ────────────────────────────────────────────────────────────
+// The favourites' covers are kept in LittleFS, decoded (RGB565 at the size the
+// tiles show them), so they are there at boot without a download or a decode.
+// /art/<key>.565: a 4-byte header (size, 0x565) then size*size pixels.
+//
+// Flash is touched only by fsTask: reading or writing it turns the cache off,
+// and the artwork task's stack is in PSRAM, which is unreachable meanwhile.
+#define ART_DIR          "/art"
+#define ART_MAX_STORED   128
+#define ART_FS_MIN_FREE  (256 * 1024)
+
+struct FsReq {
+    enum { LOAD, SAVE, PRUNE } op;
+    uint32_t  key;
+    int       size;
+    char*     url;      // LOAD: PSRAM copy, for the download if the file is gone
+    uint16_t* px;       // SAVE: PSRAM copy of the pixels, freed by fsTask
+    uint32_t* keys;     // PRUNE: the keys to keep (PSRAM), freed by fsTask
+    int       n;
+};
+
+static QueueHandle_t s_fsq = nullptr;
+static uint32_t      s_stored[ART_MAX_STORED];
+static int           s_stored_n = 0;
+static volatile bool s_fs_ready = false;   // the directory has been listed
+
+static bool storedHas(uint32_t key) {
+    for (int i = 0; i < s_stored_n; ++i) if (s_stored[i] == key) return true;
+    return false;
+}
+static void storedAdd(uint32_t key) {
+    if (!storedHas(key) && s_stored_n < ART_MAX_STORED) s_stored[s_stored_n++] = key;
+}
+static void storedDel(uint32_t key) {
+    for (int i = 0; i < s_stored_n; ++i)
+        if (s_stored[i] == key) { s_stored[i] = s_stored[--s_stored_n]; return; }
+}
+
+static void artPath(char* out, size_t n, uint32_t key) { snprintf(out, n, ART_DIR "/%08lx.565", (unsigned long)key); }
+
+static const lv_image_dsc_t* artGet(const char* url, int size, bool keep);
+
+uint32_t sqArtKey(const char* url, int size) { return artKey(url, size); }
+
+bool sqArtStored(const char* url, int size) {
+    if (!url || !*url || !s_lock) return false;
+    const uint32_t key = artKey(url, size);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool has = storedHas(key);
+    xSemaphoreGive(s_lock);
+    return has;
+}
+
+const lv_image_dsc_t* sqArtGet(const char* url, int size) { return artGet(url, size, false); }
+const lv_image_dsc_t* sqArtGetKept(const char* url, int size) { return artGet(url, size, true); }
+
+void sqArtPrune(const uint32_t* keep, int n) {
+    if (!s_fsq) return;
+    FsReq r = {};
+    r.op = FsReq::PRUNE;
+    r.n = n;
+    r.keys = (uint32_t*)heap_caps_malloc((n ? n : 1) * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    if (!r.keys) return;
+    if (n) memcpy(r.keys, keep, n * sizeof(uint32_t));
+    if (xQueueSend(s_fsq, &r, 0) != pdTRUE) heap_caps_free(r.keys);
+}
+
+static void slotFill(ArtSlot& s, uint16_t* px, int size) {
+    s.pixels = px;
+    s.dsc = {};
+    s.dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s.dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s.dsc.header.w = size;
+    s.dsc.header.h = size;
+    s.dsc.header.stride = size * 2;
+    s.dsc.data = (const uint8_t*)px;
+    s.dsc.data_size = size * size * 2;
+    s.state = ArtSlot::READY;
+}
+
+static const lv_image_dsc_t* artGet(const char* url, int size, bool keep) {
     if (!url || !*url || !s_slots) return nullptr;
     if (strncmp(url, "http", 4) != 0 && url[0] != '/') return nullptr;   // "unknown", "", ...
+    // Until the flash copies are listed, a kept picture would be downloaded
+    // again for nothing: the caller asks again when sq_art_version moves.
+    if (keep && !s_fs_ready) return nullptr;
     uint32_t key = artKey(url, size);
     const lv_image_dsc_t* out = nullptr;
     bool enqueue = false;
+    bool from_flash = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     ArtSlot* hit = nullptr;
     for (int i = 0; i < ART_SLOTS; ++i)
@@ -97,15 +184,30 @@ const lv_image_dsc_t* sqArtGet(const char* url, int size) {
             s->key = key;
             s->size = size;
             s->state = ArtSlot::QUEUED;
+            s->keep = keep;
             s->last_use = millis();
             enqueue = true;
+            from_flash = keep && storedHas(key);
         }
     }
+    if (hit && keep) hit->keep = true;
     xSemaphoreGive(s_lock);
+    if (enqueue && from_flash) {
+        FsReq f = {};
+        f.op = FsReq::LOAD;
+        f.key = key;
+        f.size = size;
+        f.url = (char*)heap_caps_malloc(strlen(url) + 1, MALLOC_CAP_SPIRAM);
+        if (f.url) strcpy(f.url, url);
+        if (f.url && xQueueSend(s_fsq, &f, 0) == pdTRUE) return out;
+        if (f.url) heap_caps_free(f.url);
+        // Queue full: fall through to the network.
+    }
     if (enqueue) {
         ArtReq r = {};
         r.key = key;
         r.size = size;
+        r.keep = keep;
         strlcpy(r.url, url, sizeof(r.url));
         if (xQueueSend(s_queue, &r, 0) != pdTRUE) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -397,16 +499,20 @@ static void artTask(void*) {
             ArtSlot& s = s_slots[i];
             if (s.key != r.key || s.state != ArtSlot::QUEUED) continue;
             if (px) {
-                s.pixels = px;
-                s.dsc = {};
-                s.dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-                s.dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-                s.dsc.header.w = r.size;
-                s.dsc.header.h = r.size;
-                s.dsc.header.stride = r.size * 2;
-                s.dsc.data = (const uint8_t*)px;
-                s.dsc.data_size = r.size * r.size * 2;
-                s.state = ArtSlot::READY;
+                if (r.keep || s.keep) {
+                    // A copy for fsTask: the slot's own pixels may be evicted
+                    // before the write happens.
+                    FsReq f = {};
+                    f.op = FsReq::SAVE;
+                    f.key = r.key;
+                    f.size = r.size;
+                    f.px = (uint16_t*)heap_caps_malloc(r.size * r.size * 2, MALLOC_CAP_SPIRAM);
+                    if (f.px) {
+                        memcpy(f.px, px, r.size * r.size * 2);
+                        if (xQueueSend(s_fsq, &f, 0) != pdTRUE) heap_caps_free(f.px);
+                    }
+                }
+                slotFill(s, px, r.size);
                 px = nullptr;
             } else {
                 s.state = ArtSlot::FAILED;
@@ -424,11 +530,149 @@ static void artTask(void*) {
     }
 }
 
+// ── Flash task ──────────────────────────────────────────────────────────────
+static void fsList(void) {
+    if (!LittleFS.exists(ART_DIR)) LittleFS.mkdir(ART_DIR);
+    File dir = LittleFS.open(ART_DIR);
+    int n = 0;
+    if (dir) {
+        for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+            const char* name = f.name();
+            const char* base = strrchr(name, '/');
+            base = base ? base + 1 : name;
+            uint32_t key = strtoul(base, nullptr, 16);
+            f.close();
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            storedAdd(key);
+            xSemaphoreGive(s_lock);
+            ++n;
+        }
+        dir.close();
+    }
+    Serial.printf("[SQ/FS] %d cover(s) in flash\n", n);
+}
+
+static void fsLoad(FsReq& r) {
+    char path[32];
+    artPath(path, sizeof(path), r.key);
+    uint16_t* px = nullptr;
+    File f = LittleFS.open(path, "r");
+    if (f) {
+        uint16_t hdr[2] = {0, 0};
+        const size_t bytes = (size_t)r.size * r.size * 2;
+        if (f.read((uint8_t*)hdr, 4) == 4 && hdr[0] == r.size && hdr[1] == 0x565 && (size_t)f.size() == bytes + 4) {
+            px = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+            if (px && f.read((uint8_t*)px, bytes) != bytes) { heap_caps_free(px); px = nullptr; }
+        }
+        f.close();
+    }
+    const bool read_ok = px != nullptr;
+    bool done = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (!px) storedDel(r.key);
+    for (int i = 0; i < ART_SLOTS && px; ++i) {
+        ArtSlot& s = s_slots[i];
+        if (s.key != r.key || s.state != ArtSlot::QUEUED) continue;
+        slotFill(s, px, r.size);
+        px = nullptr;
+        done = true;
+        break;
+    }
+    xSemaphoreGive(s_lock);
+    if (px) heap_caps_free(px);   // the slot went away meanwhile
+    if (done) { sq_art_version++; return; }
+    if (read_ok || !r.url) return;   // the file is fine, nobody wants it any more
+    // Missing or damaged file: download it like any other picture.
+    Serial.printf("[SQ/FS] %s unusable - downloading again\n", path);
+    LittleFS.remove(path);
+    ArtReq q = {};
+    q.key = r.key;
+    q.size = r.size;
+    q.keep = true;
+    strlcpy(q.url, r.url, sizeof(q.url));
+    if (xQueueSend(s_queue, &q, pdMS_TO_TICKS(500)) != pdTRUE) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        for (int i = 0; i < ART_SLOTS; ++i)
+            if (s_slots[i].key == r.key && s_slots[i].state == ArtSlot::QUEUED) s_slots[i].state = ArtSlot::EMPTY;
+        xSemaphoreGive(s_lock);
+    }
+}
+
+static void fsSave(FsReq& r) {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool have = storedHas(r.key);
+    const bool full = s_stored_n >= ART_MAX_STORED;
+    xSemaphoreGive(s_lock);
+    if (have || full) return;
+    const size_t bytes = (size_t)r.size * r.size * 2;
+    if (LittleFS.totalBytes() - LittleFS.usedBytes() < bytes + ART_FS_MIN_FREE) {
+        Serial.println("[SQ/FS] flash nearly full - cover not kept");
+        return;
+    }
+    char path[32];
+    artPath(path, sizeof(path), r.key);
+    const uint32_t t0 = millis();
+    File f = LittleFS.open(path, "w");
+    if (!f) return;
+    const uint16_t hdr[2] = {(uint16_t)r.size, 0x565};
+    bool ok = f.write((const uint8_t*)hdr, 4) == 4 && f.write((const uint8_t*)r.px, bytes) == bytes;
+    f.close();
+    if (!ok) { LittleFS.remove(path); return; }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    storedAdd(r.key);
+    xSemaphoreGive(s_lock);
+    sq_art_version++;
+    Serial.printf("[SQ/FS] kept cover %08lx (%u B) in %lums\n", (unsigned long)r.key, (unsigned)bytes,
+                  (unsigned long)(millis() - t0));
+}
+
+static void fsPrune(FsReq& r) {
+    uint32_t gone[ART_MAX_STORED];
+    int g = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_stored_n; ++i) {
+        bool keep = false;
+        for (int k = 0; k < r.n && !keep; ++k) keep = r.keys[k] == s_stored[i];
+        if (!keep) gone[g++] = s_stored[i];
+    }
+    for (int i = 0; i < g; ++i) storedDel(gone[i]);
+    xSemaphoreGive(s_lock);
+    for (int i = 0; i < g; ++i) {
+        char path[32];
+        artPath(path, sizeof(path), gone[i]);
+        LittleFS.remove(path);
+    }
+    if (g) Serial.printf("[SQ/FS] removed %d cover(s) no longer in the favourites\n", g);
+}
+
+static void fsTask(void*) {
+    fsList();
+    s_fs_ready = true;
+    sq_art_version++;
+    FsReq r;
+    for (;;) {
+        if (xQueueReceive(s_fsq, &r, portMAX_DELAY) != pdTRUE) continue;
+        switch (r.op) {
+            case FsReq::LOAD:  fsLoad(r); break;
+            case FsReq::SAVE:  fsSave(r); break;
+            case FsReq::PRUNE: fsPrune(r); break;
+        }
+        if (r.url)  heap_caps_free(r.url);
+        if (r.px)   heap_caps_free(r.px);
+        if (r.keys) heap_caps_free(r.keys);
+    }
+}
+
+bool sqArtFlashReady(void) { return s_fs_ready; }
+
 void sqArtStart(void) {
     s_slots = (ArtSlot*)heap_caps_calloc(ART_SLOTS, sizeof(ArtSlot), MALLOC_CAP_SPIRAM);
     s_dl    = (uint8_t*)heap_caps_malloc(ART_MAX_BYTES, MALLOC_CAP_SPIRAM);
     s_lock  = xSemaphoreCreateMutex();
     s_queue = xQueueCreate(ART_QUEUE_LEN, sizeof(ArtReq));
+    s_fsq   = xQueueCreate(32, sizeof(FsReq));
+    // Internal-RAM stack: this task reads and writes flash (see above).
+    xTaskCreatePinnedToCore(fsTask, "SqArtFs", 6144, nullptr, 1, nullptr, 0);
     // PSRAM stack: this task never writes flash, and mbedTLS allocates on the
     // heap (in PSRAM too, see main_square.cpp), so internal RAM is not needed.
     // Measured high-water mark: ~3KB used of 24KB with an https download.

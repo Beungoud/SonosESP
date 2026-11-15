@@ -169,6 +169,9 @@ void sqOnShow(SqScreen scr) {
         case SQ_SCR_SETTINGS: sqSettingsRefresh(); break;
         case SQ_SCR_SEARCH:   sqSearchOnShow(); break;
         case SQ_SCR_LYRICS:   sqLyricsOnShow(); break;
+        case SQ_SCR_SLEEP:    sqSleepOnShow(); break;
+        case SQ_SCR_UPDATE:   sqOtaOnShow(); break;
+        case SQ_SCR_SETUP:    sqSetupOnShow(); break;
         default: break;
     }
 }
@@ -182,7 +185,33 @@ void sqOnWifiConnected(void) {
     setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();
     sqWorkPost(SQ_JOB_START_SONOS);
-    if (sqCurrent() == SQ_SCR_WIFI) sqShow(SQ_SCR_PLAYER);
+    if (sqCurrent() == SQ_SCR_WIFI) sqShow(sqSetupNeeded() ? SQ_SCR_SETUP : SQ_SCR_PLAYER);
+}
+
+// Favourites' covers not in flash yet (a favourite added since the first
+// boot): fetch a few at a time, so they are there at the next boot too.
+static void keepFavCovers(void) {
+    static uint32_t next = 0;
+    if ((int32_t)(millis() - next) < 0) return;
+    next = millis() + 5000;
+    if (!sq_favs_from_speaker || !sqArtFlashReady()) return;
+    int asked = 0;
+    for (int i = 0, n = sqFavsCount(); i < n && asked < 4; ++i) {
+        SqFav f;
+        if (!sqFavsGet(i, &f) || !f.art[0] || sqArtStored(f.art, SQ_FAV_ART_PX)) continue;
+        sqArtGetKept(f.art, SQ_FAV_ART_PX);
+        ++asked;
+    }
+}
+
+// Firmware updates: a first look a couple of minutes after Wi-Fi, then twice a day.
+static void otaSchedule(void) {
+    static uint32_t next = 0;
+    if (!s_wifi_up) return;
+    if (!next) { next = millis() + 120000; return; }
+    if ((int32_t)(millis() - next) < 0 || sqWorkBusy()) return;
+    next = millis() + 12UL * 3600 * 1000;
+    sqWorkPost(SQ_JOB_OTA_CHECK);
 }
 
 void sqUiPoll(void) {
@@ -230,6 +259,8 @@ void sqUiPoll(void) {
             case SQ_SCR_ROOMS:    sqRoomsRefresh(); break;
             case SQ_SCR_FAVS:     sqFavsRefresh(); break;
             case SQ_SCR_SETTINGS: sqSettingsRefresh(); break;
+            case SQ_SCR_UPDATE:   sqOtaRefresh(); break;
+            case SQ_SCR_SETUP:    sqSetupTick(); break;
             default: break;
         }
         static uint32_t rooms_seen = 0;
@@ -252,6 +283,8 @@ void sqUiPoll(void) {
     if (millis() - tr > 200)
         Serial.printf("[SLOW] refresh of screen %d %lums\n", (int)sqCurrent(), (unsigned long)(millis() - tr));
     if (!s_wifi_up && WiFi.status() == WL_CONNECTED) sqOnWifiConnected();
+    keepFavCovers();
+    otaSchedule();
 }
 
 void setup() {
@@ -291,6 +324,8 @@ void setup() {
     String ssid = wifiPrefs.getString(NVS_KEY_SSID, "");
     String pass = wifiPrefs.getString(NVS_KEY_PASSWORD, "");
     brightness_level = wifiPrefs.getInt(NVS_KEY_BRIGHTNESS, 80);
+    ota_channel      = wifiPrefs.getInt(NVS_KEY_OTA_CHANNEL, 0);
+    sqSleepLoad();
 
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
         Serial.printf("[WIFI] Disconnected: reason %u\n", info.wifi_sta_disconnected.reason);
@@ -315,6 +350,10 @@ void setup() {
     if (!display_init()) { Serial.println("Display FAIL"); while (1) delay(1000); }
     if (!touch_init())   { Serial.println("Touch FAIL"); }
 
+    // An update asked for before the restart: flash it now, before anything
+    // else takes memory or the network. Restarts when done.
+    if (sqOtaBootPending()) sqOtaRunAtBoot();
+
     sonos.begin();
     sqWorkStart();
     sqArtStart();
@@ -331,9 +370,16 @@ void setup() {
     sqSettingsCreate();
     sqWifiCreate();
     sqLyricsCreate();
+    sqSleepCreate();
+    sqOtaCreate();
+    sqSetupCreate();
 
-    if (ssid.length()) sqShow(SQ_SCR_PLAYER);
-    else               sqWifiOpen();   // first boot: nothing works without the network
+    // A panel that already has favourites in flash was set up by a version
+    // without the Premier démarrage screen: nothing to show it.
+    if (sqSetupNeeded() && sqFavsCount() > 0) sqSetupMarkDone();
+    if (!ssid.length())      sqWifiOpen();   // first boot: nothing works without the network
+    else if (sqSetupNeeded()) sqShow(SQ_SCR_SETUP);
+    else                     sqShow(SQ_SCR_PLAYER);
     lv_timer_handler();
     display_set_brightness(brightness_level);
     Serial.printf("Ready - internal free %u, largest %u\n",
@@ -344,7 +390,8 @@ void setup() {
 void loop() {
     const uint32_t t0 = millis();
     benchSerial();
-    if (touch_take_wake_request()) last_touch_time = millis();
+    if (touch_take_wake_request()) sqSleepOnTouch();
+    sqSleepTick();
     sqUiPoll();
     const uint32_t t1 = millis();
     uint32_t wait = lv_timer_handler();

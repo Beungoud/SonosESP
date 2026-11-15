@@ -9,7 +9,7 @@
 #include "ui_common.h"
 
 #define TILE_W    141
-#define COVER_H   136
+#define COVER_H   SQ_FAV_ART_PX
 #define MAX_TILES 60
 
 static lv_obj_t* s_scr;
@@ -100,7 +100,7 @@ void sqFavsCreate(void) {
 }
 
 static void tileArt(Tile& t) {
-    const lv_image_dsc_t* img = t.art[0] ? sqArtGet(t.art, COVER_H) : nullptr;
+    const lv_image_dsc_t* img = t.art[0] ? sqArtGetKept(t.art, COVER_H) : nullptr;
     if (img) {
         lv_image_set_src(t.img, img);
         sqSetHidden(t.img, false);
