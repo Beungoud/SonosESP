@@ -219,6 +219,11 @@ public:
     // The HTTP status of the last SOAP request: 200, 500, or a negative
     // HTTPClient error such as HTTPC_ERROR_READ_TIMEOUT (-11). See the member.
     int lastSoapHttpCode() const { return last_soap_http_code; }
+    // The UPnP <errorCode> of the last SOAP fault (HTTP 500) and which action
+    // drew it, so a UI can say why a tap did nothing (701: nothing to play).
+    volatile int         lastUpnpError    = 0;
+    volatile uint32_t    lastUpnpErrorMs  = 0;
+    const char* volatile lastUpnpAction   = "";
 
     // sendSOAP() returns "" for EVERY failure, and the HTTP code is how callers
     // tell them apart. A request that never left the panel - the network mutex
@@ -259,10 +264,21 @@ public:
     void requestQueueUpdate();         // Async queue refresh (runs in network task, safe from UI thread)
     bool saveCurrentTrack(const char* playlistName = "Favorites");  // Save current track to playlist
     String browseContent(const char* objectID, int startIndex = 0, int count = 100);  // Browse ContentDirectory
+    // Sonos favourites ("My Sonos", FV:2) — ContentDirectory CreateObject /
+    // DestroyObject. `metadata` is the item's DIDL, decoded (literal < >); it
+    // becomes the favourite's r:resMD, which is what names the service account.
+    bool addFavorite(const char* title, const char* uri, const char* metadata,
+                     const char* artURI, const char* description, String* newId = nullptr);
+    bool removeFavorite(const char* objectId);
+    // What a star on the player should save: the station for radio, else the
+    // current track. URI and decoded DIDL; false when nothing usable is playing.
+    bool currentFavoriteCandidate(String* uri, String* metadata, String* title);
     bool playURI(const char* uri, const char* metadata = "");  // Play URI with optional metadata
     bool playPlaylist(const char* playlistID, const char* title = "Playlist");  // Play a Sonos playlist by ID (e.g., "SQ:25")
     bool playContainer(const char* containerURI, const char* metadata = "");  // Play a container URI with DIDL metadata
     String listMusicServices();  // List available music services
+    String getHouseholdID();     // DeviceProperties.GetHouseholdID — "" on failure
+    String getSystemString(const char* variableName);  // SystemProperties.GetString
     String getCurrentTrackInfo();  // Get current track URI and metadata for analysis
 
     // Helper methods (public for UI)

@@ -13,6 +13,7 @@
 #include "clock_face.h"
 #include "ui_theme.h"
 #include "ui_boot_screen.h"
+#include "ui_portrait_nav.h"   // portrait tab screens (empty on landscape builds)
 #include <esp_flash.h>
 #include <esp_ota_ops.h>    // OTA trial-run validation
 #include <esp_core_dump.h>  // stored crash reporting
@@ -354,6 +355,11 @@ void setup() {
     clock_style          = wifiPrefs.getInt(NVS_KEY_CLOCK_STYLE,   CLOCK_DEFAULT_STYLE);
     clockFaceMigrate();      // rewrite pre-1.11 indices (Classic was removed)
     clockFaceClampStyle();   // registry-driven: survives a face being removed by a downgrade
+#if UI_PORTRAIT
+    // Only the Amber face has a portrait layout so far. In memory only: the
+    // saved choice is kept for a landscape image flashed back later.
+    clock_style = CLOCK_STYLE_AMBER;
+#endif
     // Clamp indices in case lists changed between firmware versions
     if (clock_tz_idx    < 0 || clock_tz_idx    >= CLOCK_ZONES_COUNT)   clock_tz_idx    = 0;
     // The photo list changed from 25 keywords to 13 regions when the source moved
@@ -428,6 +434,10 @@ void setup() {
     }
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("\n[WIFI] Connected - IP: %s\n", WiFi.localIP().toString().c_str());
+        // Which access point: with a mesh, several share the SSID and the panel
+        // stays on whichever it joined at boot.
+        Serial.printf("[WIFI] AP %s ch=%d rssi=%d\n", WiFi.BSSIDstr().c_str(), (int)WiFi.channel(),
+                      (int)WiFi.RSSI());
         // Start NTP sync (SNTP daemon — no HTTPS, tiny UDP packets)
         configTime(0, 0, "pool.ntp.org", "time.nist.gov");
         // Apply user-selected timezone via POSIX TZ string
@@ -671,6 +681,12 @@ void setup() {
     createGeneralScreen();
     createClockScreen();
     createClockSettingsScreen();
+#if UI_PORTRAIT
+    // The Settings tab's landing page and the Search placeholder. Last, so
+    // every screen their rows and buttons open already exists.
+    createSettingsMenuScreen();
+    createSearchScreen();
+#endif
     bootScreenProgress(85);
 
     art_mutex = xSemaphoreCreateMutex();
@@ -850,8 +866,19 @@ void logHeapStatus() {
 // Main application task — runs all LVGL and UI logic with a 16KB internal SRAM stack.
 // The Arduino loopTask (fixed 8KB) becomes idle below; it was regularly hitting
 // only ~976 bytes free, causing Store access fault crashes via LVGL buffer corruption.
+static uint32_t lvglRealTick(void) { return millis(); }
+
 static void mainAppTask(void* param) {
     esp_task_wdt_add(NULL);  // Register this task with watchdog (not loopTask)
+
+    // From here on LVGL runs on real time. Until now its clock only moved where
+    // code called lv_tick_inc() by hand - which setup() and the boot screen
+    // still rely on (see ui_boot_screen.cpp) - and this loop added a flat 3ms
+    // per pass. A pass that renders a frame takes ~20ms, so LVGL saw a sixth of
+    // the time that had passed: the 16ms refresh timer needed several more
+    // passes to come due, capping scrolling at ~24fps, and every animation and
+    // scroll throw ran slow exactly when the screen was busiest.
+    lv_tick_set_cb(lvglRealTick);
 
     for (;;) {
         esp_task_wdt_reset();
@@ -874,7 +901,6 @@ static void mainAppTask(void* param) {
         // "A newer version is available" toast. No-op until its interval is due,
         // and the check itself is gated on WiFi, DMA and the radio being idle.
         otaBackgroundCheckTick();
-        lv_tick_inc(3);
 
         // Skip LVGL timer during OTA to prevent PSRAM access during flash writes
         bool skip_updates = false;

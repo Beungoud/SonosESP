@@ -2,15 +2,15 @@
 
 # SonosESP
 
-**A touchscreen Sonos controller for ESP32-P4.**
+**A touchscreen Sonos controller for ESP32-P4 and ESP32-S3.**
 
-A wall-mount or desktop remote for Sonos speakers: album art, synced lyrics, full library browsing, multi-room control, weather and five screensaver clock faces — on a 4″ or 7″ panel, with over-the-air updates.
+A wall-mount or desktop remote for Sonos speakers: album art, synced lyrics, full library browsing, multi-room control, weather and five screensaver clock faces — on a 4″ or 7″ panel, upright or landscape, plus a kid-friendly UI for a 4″ square panel and the upright 4″, with over-the-air updates.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Ready-blue.svg)](https://platformio.org/)
-[![GitHub Downloads (all releases)](https://img.shields.io/github/downloads/OpenSurface/SonosESP/total?style=flat-square&logo=github&label=Downloads)](https://github.com/OpenSurface/SonosESP/releases)
-[![GitHub Release](https://img.shields.io/github/v/release/OpenSurface/SonosESP?style=flat-square&logo=github&label=Latest%20Release)](https://github.com/OpenSurface/SonosESP/releases/latest)
-[![GitHub Stars](https://img.shields.io/github/stars/OpenSurface/SonosESP?style=flat-square&logo=github&label=Stars)](https://github.com/OpenSurface/SonosESP/stargazers)
+[![GitHub Downloads (all releases)](https://img.shields.io/github/downloads/Beungoud/SonosESP/total?style=flat-square&logo=github&label=Downloads)](https://github.com/Beungoud/SonosESP/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/Beungoud/SonosESP?style=flat-square&logo=github&label=Latest%20Release)](https://github.com/Beungoud/SonosESP/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/Beungoud/SonosESP?style=flat-square&logo=github&label=Stars)](https://github.com/Beungoud/SonosESP/stargazers)
 
 [![Panels running SonosESP](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpizza.goatcounter.com%2Fcounter%2FTOTAL.json&query=%24.count_unique&style=for-the-badge&color=ff8c00&label=Panels%20running%20SonosESP)](https://opensurface.github.io/SonosESP/)
 
@@ -18,11 +18,46 @@ A wall-mount or desktop remote for Sonos speakers: album art, synced lyrics, ful
 
 ### [Install in your browser — no toolchain required](https://opensurface.github.io/SonosESP/)
 
-[Features](#features) · [Music sources](#music-sources) · [Themes](#player-themes) · [Screensaver](#screensaver-themes) · [Hardware](#hardware) · [Install](#installation) · [Setup](#first-time-setup) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](#contributing)
+[This fork](#about-this-fork) · [Features](#features) · [Music sources](#music-sources) · [Themes](#player-themes) · [Screensaver](#screensaver-themes) · [Hardware](#hardware) · [Install](#installation) · [Setup](#first-time-setup) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](#contributing)
 
 </div>
 
 ---
+
+## About this fork
+
+This is a fork of [OpenSurface/SonosESP](https://github.com/OpenSurface/SonosESP).
+It adds:
+
+- **A square 4″ panel** — the GUITION ESP32-4848S040 (ESP32-S3, 480×480), with its own
+  kid-friendly UI: one colour per destination, Sonos favourites, a search across the
+  household's streaming services and full-screen live lyrics (`src/square/`)
+- **The same kids UI on the upright 4″ P4 panel** (480×800)
+- **Portrait builds of the regular UI** for the 4″ panel mounted upright
+- **Over-the-air updates from this fork.** Firmware built from here checks the releases
+  of [Beungoud/SonosESP](https://github.com/Beungoud/SonosESP/releases), not the
+  upstream ones, and every release carries an image for each of the builds above.
+  See [OTA updates](#ota-updates)
+
+**Square 4″ panel (ESP32-S3, 480×480)** — player, Sonos favourites,
+streaming-service search, Spotify browsing:
+
+![The kids UI on the square 4-inch ESP32-S3 panel: player, favourites, search results and a Spotify artist list](docs/public/shots/square-tour.png)
+
+**Upright 4″ P4 panel (480×800), same kids UI** — player, favourites, search with ideas
+for children, room picker, Spotify home:
+
+![The kids UI on the upright 4-inch ESP32-P4 panel: player, favourites, Spotify search, room picker and Spotify home](docs/public/shots/kids-p4-tour.png)
+
+<sub>Real screenshots, read from the panels' frame buffers over serial.</sub>
+
+What is still missing on the square and kids builds is tracked in
+[docs/todos.md](docs/todos.md). Bugs in the shared code belong
+[upstream](https://github.com/OpenSurface/SonosESP/issues).
+
+---
+
+The regular UI, on the landscape 4″ P4 panel:
 
 ![SonosESP running on a GUITION ESP32-P4 touchscreen, showing album art and playback controls](docs/public/sonosESP.gif)
 
@@ -51,7 +86,7 @@ A wall-mount or desktop remote for Sonos speakers: album art, synced lyrics, ful
 
 ### System
 
-- **Two panel sizes, one codebase** — 4″ and 7″ build from the same source, with type and spacing scaling to the panel rather than being authored twice
+- **Several panels, one codebase** — 4″ and 7″ build from the same source, with type and spacing scaling to the panel rather than being authored twice. The 4″ also builds upright, and the square ESP32-S3 panel shares the Sonos core with its own UI (see [Hardware](#hardware))
 - **OTA updates** — install new firmware from the panel, on Stable or Nightly channels, with resumable downloads
 - **Browser installer** — flash over USB from Chrome, Edge or Opera; no toolchain required
 - **Restart history** — **Settings → General** lists the last eight restarts and why each happened, so a panel that restarted overnight can say why. See [Troubleshooting](docs/TROUBLESHOOTING.md#the-panel-restarted-on-its-own)
@@ -78,11 +113,17 @@ you are, so a deep path like Music Library → Artists → an artist → an albu
 navigable. Long lists load in pages rather than truncating, so a 500-track queue is
 fully reachable.
 
-**Streaming services.** Content you have saved — favourites and playlists from
-Spotify, Apple Music, YouTube Music and others — plays directly, because the speaker
-resolves it with credentials it already holds. SonosESP never asks you to sign in to
-anything. Searching a service's full catalogue is not supported; add what you want in
-the Sonos app and it appears here.
+**Streaming services.** Every service linked in the Sonos app — Spotify, Apple Music,
+Amazon Music, TuneIn and the rest — gets its own tile under Sources. Browse its
+library and catalogue (playlists, albums, artists, radio) and play an album, a
+playlist or a single track. SonosESP never asks you to sign in to anything: it uses
+the accounts the speakers already hold, through the same service endpoints the Sonos
+app calls. See [PRIVACY.md](PRIVACY.md#streaming-service-accounts) for what that
+involves. Searching a catalogue is not supported yet.
+
+> This uses an undocumented part of the Sonos protocol, reverse-engineered by the
+> [SoCo](https://github.com/SoCo/SoCo/pull/1010) project. A Sonos update can break it;
+> your favourites and playlists keep working regardless.
 
 ## Player themes
 
@@ -118,9 +159,10 @@ stops: **UNTIL 22:15**. Touch the screen at any time to return to the player.
 
 ## Hardware
 
-SonosESP runs on **GUITION ESP32-P4 + ESP32-C6 touchscreen boards**. Both panel sizes
-build from the same codebase, and the installer and OTA select the right image
-automatically (`firmware-4inch.bin` / `firmware-7inch.bin`).
+SonosESP runs on **GUITION ESP32-P4 + ESP32-C6 touchscreen boards**, and in this fork
+on the **GUITION ESP32-4848S040** square ESP32-S3 panel. Every variant builds from the
+same codebase, and OTA selects the right image for the panel automatically (see
+[Builds and firmware images](#builds-and-firmware-images)).
 
 ![GUITION JC4880P443C ESP32-P4 touchscreen development board](docs/public/panel.png)
 
@@ -142,9 +184,45 @@ automatically (`firmware-4inch.bin` / `firmware-7inch.bin`).
 > different LCD panels under the same 7″ product code — a first-boot wizard detects
 > which one is fitted. See [docs/MULTI_SCREEN_SUPPORT.md](docs/MULTI_SCREEN_SUPPORT.md).
 
+### Square 4″ panel
+
+| | **Square 4″ — this fork** |
+|---|---|
+| **Board** | GUITION ESP32-4848S040 ("86 box") |
+| **Display** | 480×480, ST7701S, 16-bit RGB bus |
+| **Touch** | GT911 capacitive (I²C) |
+| **MCU** | ESP32-S3, 240 MHz dual-core Xtensa |
+| **Wi-Fi** | Native (ESP32-S3) |
+| **Flash / PSRAM** | 16 MB / 8 MB octal |
+| **Interface** | USB-C, console on a CH340 UART |
+
+It has no JPEG decoder in hardware, so album art is decoded in software.
+
+### Builds and firmware images
+
+Each build is its own image, and each image is a separate asset in every release. A
+panel only ever installs the asset named for its own build, so the landscape image
+never lands on an upright panel, nor a pre-rev3 image on rev3 silicon.
+
+| Build (`pio run -e …`) | Panel and UI | Release asset |
+|---|---|---|
+| `esp32_4inch` | 4″, landscape | `firmware-4inch.bin` |
+| `esp32_4inch_r3` | 4″, landscape, ESP32-P4 rev 3.x | `firmware-4inch-r3.bin` |
+| `esp32_7inch` | 7″, landscape *(beta)* | `firmware-7inch.bin` |
+| `esp32_4inch_portrait` | 4″, upright | `firmware-4inch-portrait.bin` |
+| `esp32_4inch_r3_portrait` | 4″, upright, rev 3.x | `firmware-4inch-r3-portrait.bin` |
+| `esp32_4inch_kids` | 4″, upright, kids UI | `firmware-4inch-kids.bin` |
+| `esp32_4inch_r3_kids` | 4″, upright, kids UI, rev 3.x | `firmware-4inch-r3-kids.bin` |
+| `esp32s3_square` | Square 4″ ESP32-S3, kids UI | `firmware-square.bin` |
+
 ## Installation
 
 ### Web installer (recommended)
+
+> **In this fork:** the web installer below is upstream's. It flashes the upstream
+> 4″ and 7″ firmware, which then takes its updates from OpenSurface, not from here,
+> and it has no image for the portrait, kids or square builds. To run this fork,
+> [build from source](#build-from-source).
 
 1. Open the [web installer](https://opensurface.github.io/SonosESP/)
 2. Choose your screen size — 4″ (stable) or 7″ (beta)
@@ -158,17 +236,33 @@ automatically (`firmware-4inch.bin` / `firmware-7inch.bin`).
 ### Build from source
 
 ```bash
-git clone https://github.com/OpenSurface/SonosESP.git
+git clone https://github.com/Beungoud/SonosESP.git
 cd SonosESP
 pio run -e esp32_4inch -t upload      # 4" board
 pio run -e esp32_7inch -t upload      # 7" board
+pio run -e esp32_4inch_kids -t upload # 4" board, upright, kids UI
+pio run -e esp32s3_square -t upload --upload-port /dev/ttyUSB0   # square panel
 ```
+
+The square panel enumerates as a CH340 serial port: check which `/dev/ttyUSB*` it is
+before uploading. The full list of builds is under
+[Builds and firmware images](#builds-and-firmware-images).
 
 ### OTA updates
 
 Once installed, the panel updates itself: **Settings → Firmware Update → Check for
 Updates**. Choose Stable or Nightly in the channel dropdown; the device selects the
 correct build for its own panel.
+
+Firmware built from this fork looks for updates in the releases of
+[Beungoud/SonosESP](https://github.com/Beungoud/SonosESP/releases) (`GITHUB_REPO` in
+`include/ui_common.h`). The release workflows refuse to publish if that does not match
+the repository they run in. A stable release is built when `version.json` changes on
+`main`; a nightly is started with `python scripts/create_nightly.py`. See
+[RELEASE.md](RELEASE.md).
+
+> OTA on the square and kids builds is still being added: until it lands, those panels
+> update over USB.
 
 Interrupted downloads resume rather than restarting. If a transfer stalls, the panel
 reconnects and continues from the byte it reached, so an unreliable connection no
@@ -215,7 +309,8 @@ Release process: [RELEASE.md](RELEASE.md)
 
 Contributions are welcome — please read [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
-Found a bug, or want a feature? [Open an issue](https://github.com/OpenSurface/SonosESP/issues).
+Found a bug, or want a feature? [Open an issue](https://github.com/OpenSurface/SonosESP/issues)
+upstream. Issues are not enabled on this fork.
 
 ## Community builds
 

@@ -224,7 +224,11 @@ String SonosController::sendSOAP(SonosDevice* dev, const char* service, const ch
         if (clock_photo_in_progress) {
             Serial.println("[SOAP] Deferred - clock photo has the radio (expected)");
         } else {
-            Serial.println("[SOAP] Failed to acquire network mutex - request failed");
+            // Name the holder: "nothing reacts" is a task sitting on this mutex.
+            TaskHandle_t holder = xSemaphoreGetMutexHolder(network_mutex);
+            Serial.printf("[SOAP] %s.%s: network mutex busy for %dms (held by %s) - request failed\n",
+                          service, action, NETWORK_MUTEX_TIMEOUT_MS,
+                          holder ? pcTaskGetName(holder) : "?");
         }
         // Nothing was sent, so say that rather than leaving the last call's code.
         last_soap_http_code = SOAP_NOT_SENT;
@@ -274,6 +278,11 @@ String SonosController::sendSOAP(SonosDevice* dev, const char* service, const ch
     } else if (strcmp(service, "ZoneGroupTopology") == 0) {
         // NOT under /MediaRenderer — the topology service sits at the device root.
         endpoint = "/ZoneGroupTopology/Control";
+    } else if (strcmp(service, "DeviceProperties") == 0) {
+        // Device-root services too. The /MediaRenderer fallback below would 404.
+        endpoint = "/DeviceProperties/Control";
+    } else if (strcmp(service, "SystemProperties") == 0) {
+        endpoint = "/SystemProperties/Control";
     } else {
         // Fallback - build endpoint in buffer
         snprintf(custom_endpoint, sizeof(custom_endpoint), "/MediaRenderer/%s/Control", service);
@@ -300,7 +309,18 @@ String SonosController::sendSOAP(SonosDevice* dev, const char* service, const ch
     // HTTP/1.1 keep-alive (persistent connections cause -1 / connection-refused errors).
     HTTPClient http;
     http.begin(url);
-    http.setTimeout(2000);
+    // Transport changes answer only once the player has acted on them: a
+    // grouped stereo pair starting a radio stream took over 2s, so Play and
+    // Pause timed out although they worked, the UI kept the old state and the
+    // next tap undid them. Queries keep the short timeout.
+    const bool transport = !strcmp(service, "AVTransport") &&
+        (!strcmp(action, "Play") || !strcmp(action, "Pause") || !strcmp(action, "Next") ||
+         !strcmp(action, "Previous") || !strcmp(action, "Seek") ||
+         !strcmp(action, "SetAVTransportURI") || !strcmp(action, "AddURIToQueue"));
+    // The service descriptor list is a big answer; on the P4 at boot, with
+    // discovery and artwork sharing the SDIO link, it did not arrive in 2s.
+    const bool big = !strcmp(action, "ListAvailableServices");
+    http.setTimeout(big ? 8000 : transport ? 6000 : 2000);
     http.addHeader("Content-Type", "text/xml; charset=\"utf-8\"");
     // Tell Sonos to close the connection after the response. Sonos already does this
     // (no keep-alive per comment above), but making it explicit ensures the server
@@ -330,13 +350,16 @@ String SonosController::sendSOAP(SonosDevice* dev, const char* service, const ch
         // This is transient - don't count as error.
         // Read and discard the 500 response body: this lets the server send its FIN
         // alongside/after the body → we reach CLOSE_WAIT → passive close → no TIME_WAIT.
-        http.getString();
+        String fault = http.getString();
         last_transient_500_ms = millis();  // arm 3s storm gate in art task pre-wait (unthrottled)
+        lastUpnpError   = extractXML(fault, "errorCode").toInt();
+        lastUpnpAction  = action;          // a string literal at every call site
+        lastUpnpErrorMs = millis();
         // Throttle logging to avoid spam (only log first 500 in a burst)
         static unsigned long last_500_log = 0;
         if (millis() - last_500_log > 2000) {  // 2s throttle
-            Serial.printf("[SOAP] Transient 500 for %s.%s | adlp=%d heap=%u dma=%u\n",
-                service, action,
+            Serial.printf("[SOAP] Transient 500 for %s.%s (UPnP %d) | adlp=%d heap=%u dma=%u\n",
+                service, action, (int)lastUpnpError,
                 (int)art_download_in_progress,
                 heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                 heap_caps_get_free_size(MALLOC_CAP_DMA));
@@ -843,6 +866,78 @@ bool SonosController::saveCurrentTrack(const char* playlistName) {
     }
 }
 
+// ── Sonos favourites (FV:2) ─────────────────────────────────────────────────
+// A favourite is an <item> of class object.itemobject.item.sonos-favorite whose
+// <res> is what to play and whose r:resMD is the DIDL to play it with. The
+// Elements argument of CreateObject is that DIDL-Lite document, escaped once
+// for the SOAP body - and resMD, being XML inside XML, is escaped once more.
+bool SonosController::addFavorite(const char* title, const char* uri, const char* metadata,
+                                  const char* artURI, const char* description, String* newId) {
+    if (!uri || !*uri) return false;
+    String scheme = String(uri);
+    int colon = scheme.indexOf(':');
+    scheme = colon > 0 ? scheme.substring(0, colon) : String("x-rincon-mp3radio");
+
+    String t = title ? title : "";        encodeXML(t);
+    String u = uri;                       encodeXML(u);
+    String a = artURI ? artURI : "";      encodeXML(a);
+    String d = description ? description : ""; encodeXML(d);
+    String md = metadata ? metadata : ""; encodeXML(md);
+
+    String didl =
+        "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+        "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" "
+        "xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" "
+        "xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">"
+        "<item><dc:title>" + t + "</dc:title>"
+        "<upnp:class>object.itemobject.item.sonos-favorite</upnp:class>"
+        "<res protocolInfo=\"" + scheme + ":*:*:*\">" + u + "</res>";
+    if (a.length()) didl += "<upnp:albumArtURI>" + a + "</upnp:albumArtURI>";
+    didl += "<r:type>instantPlay</r:type>";
+    if (d.length()) didl += "<r:description>" + d + "</r:description>";
+    if (md.length()) didl += "<r:resMD>" + md + "</r:resMD>";
+    didl += "</item></DIDL-Lite>";
+    encodeXML(didl);
+
+    String args = "<ContainerID>FV:2</ContainerID><Elements>" + didl + "</Elements>";
+    String resp = sendSOAP("ContentDirectory", "CreateObject", args.c_str());
+    String id = extractXML(resp, "ObjectID");
+    Serial.printf("[FAV] CreateObject '%s' -> %s (http %d)\n", title ? title : "",
+                  id.length() ? id.c_str() : "failed", last_soap_http_code);
+    if (newId) *newId = id;
+    return id.length() > 0;
+}
+
+bool SonosController::removeFavorite(const char* objectId) {
+    if (!objectId || strncmp(objectId, "FV:2/", 5) != 0) return false;   // never anything else
+    String args = String("<ObjectID>") + objectId + "</ObjectID>";
+    String resp = sendSOAP("ContentDirectory", "DestroyObject", args.c_str());
+    bool ok = last_soap_http_code == 200;
+    Serial.printf("[FAV] DestroyObject %s -> %s\n", objectId, ok ? "ok" : "failed");
+    return ok;
+}
+
+bool SonosController::currentFavoriteCandidate(String* uri, String* metadata, String* title) {
+    SonosDevice* target = transportTarget();
+    if (!target) return false;
+    // Radio and other non-queue sources: the station itself is the favourite.
+    String media = sendSOAP(target, "AVTransport", "GetMediaInfo", "<InstanceID>0</InstanceID>");
+    String curUri = decodeHTMLEntities(extractXML(media, "CurrentURI"));
+    if (curUri.length() && !curUri.startsWith("x-rincon-queue:") && !curUri.startsWith("x-rincon:")
+        && !curUri.startsWith("x-rincon-stream:") && !curUri.startsWith("x-sonos-htastream:")) {
+        *uri = curUri;
+        *metadata = decodeHTMLEntities(extractXML(media, "CurrentURIMetaData"));
+        *title = decodeHTML(extractXML(*metadata, "dc:title"));
+        return true;
+    }
+    // Playing the queue: favourite the current track.
+    String pos = sendSOAP(target, "AVTransport", "GetPositionInfo", "<InstanceID>0</InstanceID>");
+    *uri = decodeHTMLEntities(extractXML(pos, "TrackURI"));
+    *metadata = decodeHTMLEntities(extractXML(pos, "TrackMetaData"));
+    *title = decodeHTML(extractXML(*metadata, "dc:title"));
+    return uri->length() > 0 && !uri->startsWith("x-rincon");
+}
+
 String SonosController::browseContent(const char* objectID, int startIndex, int count) {
     // Use static buffer to avoid String concatenation
     static char args[512];
@@ -1320,6 +1415,23 @@ bool SonosController::playContainer(const char* containerURI, const char* metada
     updateQueue();
     Serial.println("[CONTAINER] Container loaded and playing");
     return true;
+}
+
+// The household this speaker belongs to ("Sonos_..."). Music-service accounts
+// are stored per household, encrypted under a key derived from this id, and
+// SMAPI calls identify themselves with it. "" when the speaker did not answer.
+String SonosController::getHouseholdID() {
+    String resp = sendSOAP(getCurrentDevice(), "DeviceProperties", "GetHouseholdID", "");
+    return extractXML(resp, "CurrentHouseholdID");
+}
+
+// SystemProperties.GetString. The music-service code reads R_TrialZPSerial, the
+// deviceId the official controller sends with every SMAPI request.
+String SonosController::getSystemString(const char* variableName) {
+    char args[128];
+    snprintf(args, sizeof(args), "<VariableName>%s</VariableName>", variableName);
+    String resp = sendSOAP(getCurrentDevice(), "SystemProperties", "GetString", args);
+    return extractXML(resp, "StringValue");
 }
 
 String SonosController::listMusicServices() {

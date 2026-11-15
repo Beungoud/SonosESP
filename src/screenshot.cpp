@@ -1,4 +1,6 @@
 #include "screenshot.h"
+#include "touch_driver.h"   // UI_DEBUG_TAP
+#include "clock_screen.h"   // clockDebugEnter (UI_DEBUG_TAP)
 #include "battery.h"
 #include "config.h"
 #include <esp_heap_caps.h>
@@ -60,10 +62,11 @@ void screenshotCaptureHook(const uint8_t* px_map, const lv_area_t* area) {
     // The entire cost of this feature on the hot path.
     if (!s_request || s_ready) return;
 
-    // With LV_DISPLAY_RENDER_MODE_FULL this is always the whole screen, but a
-    // partial area would mean copying DISPLAY_WIDTH*DISPLAY_HEIGHT out of a
-    // smaller buffer — a read overrun. Leave the request pending and try again
-    // on the next flush rather than capture a torn or short frame.
+    // The caller passes the whole screen: FULL mode always flushes it, and the
+    // 4" partial path (DIRECT mode) passes its full buffer on the last flush of
+    // a refresh. Anything smaller would mean copying DISPLAY_WIDTH*DISPLAY_HEIGHT
+    // out of a smaller buffer — a read overrun. Leave the request pending and
+    // try again on the next flush rather than capture a torn or short frame.
     const uint32_t w = (uint32_t)(area->x2 - area->x1 + 1);
     const uint32_t h = (uint32_t)(area->y2 - area->y1 + 1);
     if (w != DISPLAY_WIDTH || h != DISPLAY_HEIGHT) return;
@@ -181,6 +184,16 @@ void screenshotPoll(void) {
                     resendLine((uint32_t)strtoul(cmd + 9, nullptr, 16));
                 } else if (strcmp(cmd, "shotfree") == 0) {
                     releaseBuffer();
+#if UI_DEBUG_TAP
+                } else if (strncmp(cmd, "tap ", 4) == 0) {
+                    int tx = 0, ty = 0;
+                    if (sscanf(cmd + 4, "%d %d", &tx, &ty) == 2) {
+                        touch_inject_tap(tx, ty);
+                        Serial.printf("[tap] %d,%d\n", tx, ty);
+                    }
+                } else if (strcmp(cmd, "clock") == 0) {
+                    clockDebugEnter();
+#endif
                 } else if (batterySerialCommand(cmd)) {
                     // "bat ..." - the battery simulator (issue #165); "bat help"
                 }

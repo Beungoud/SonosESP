@@ -43,7 +43,33 @@ extern volatile uint32_t last_touch_time;
 #define TOUCH_WIRE_BUFFER   256
 static_assert((GT911_CONFIG_SIZE) <= TOUCH_WIRE_BUFFER, "the GT911 config read must fit Wire's buffer");
 
-#if SCREEN_SIZE != 7
+#if UI_SQUARE
+// ============================================================================
+// Square 480x480 GT911 (ESP32-4848S040). The sensor is mounted 180° from the
+// RGB panel (measured on the bench: the top-left corner reads ~449,447), so both
+// axes are flipped. INT and RST are not wired to the S3.
+// ============================================================================
+TAMC_GT911 ts = TAMC_GT911(TOUCH_GT911_SDA, TOUCH_GT911_SCL, TOUCH_GT911_INT, TOUCH_GT911_RST,
+                           TOUCH_PANEL_WIDTH, TOUCH_PANEL_HEIGHT);
+
+static void touch_begin_hw(void) {
+    if (Wire.setBufferSize(TOUCH_WIRE_BUFFER) != TOUCH_WIRE_BUFFER) {
+        Serial.println("[Touch] WARNING: could not enlarge the I2C buffer");
+    }
+    Wire.begin(TOUCH_GT911_SDA, TOUCH_GT911_SCL);
+    ts.begin();
+    ts.setRotation(ROTATION_NORMAL);
+}
+
+static bool touch_sample(int32_t* x, int32_t* y) {
+    ts.read();
+    if (!ts.isTouched || ts.touches <= 0) return false;
+    *x = constrain((int32_t)(TOUCH_PANEL_WIDTH - 1 - ts.points[0].x), 0, DISPLAY_WIDTH - 1);
+    *y = constrain((int32_t)(TOUCH_PANEL_HEIGHT - 1 - ts.points[0].y), 0, DISPLAY_HEIGHT - 1);
+    return true;
+}
+
+#elif SCREEN_SIZE != 7
 // ============================================================================
 // 4" GT911 — portrait sensor (480×800) mapped to landscape (800×480) via a
 // manual 90° rotation that matches the ST7701 display rotation.
@@ -85,9 +111,16 @@ static bool touch_sample(int32_t* x, int32_t* y) {
     if (touch_y < 0) touch_y = 0;
     if (touch_y > 799) touch_y = 799;
 
+#if UI_PORTRAIT
+    // The display draws at the panel's own orientation, so the sensor's
+    // portrait coordinates are LVGL's coordinates as they are.
+    *x = touch_x;
+    *y = touch_y;
+#else
     // 90° rotation to match the display: portrait (x, y) -> landscape (y, 479 - x)
     *x = touch_y;
     *y = 479 - touch_x;
+#endif
     return true;
 }
 
@@ -147,10 +180,40 @@ static volatile bool    t_wake    = false;   // a press needs the screen woken (
 
 static lv_indev_t* indev = NULL;
 
+#if UI_KIDS
+// A read between two GT911 frames finds the "buffer ready" bit clear, and
+// TAMC_GT911 reports that as zero touches. Mid-drag that looked like a lift and
+// a new press, so releasing a scroll clicked whatever was under the finger.
+// A lift only counts after TOUCH_LIFT_SAMPLES empty reads in a row. 40ms was
+// not enough: the bench log showed presses split in two at the very same
+// point ("down 169,247 / up after 67ms / down 169,247"), i.e. double clicks.
+// Kids UI only: the older P4 UI keeps its tuned behaviour.
+#define TOUCH_LIFT_SAMPLES 10   // ~100ms
+
+static bool touch_sample_held(int32_t* x, int32_t* y) {
+    static int32_t last_x = 0, last_y = 0;
+    static int     misses = TOUCH_LIFT_SAMPLES;
+    int32_t sx, sy;
+    if (touch_sample(&sx, &sy)) {
+        last_x = sx;
+        last_y = sy;
+        misses = 0;
+    } else if (misses < TOUCH_LIFT_SAMPLES) {
+        misses++;
+    }
+    if (misses >= TOUCH_LIFT_SAMPLES) return false;
+    *x = last_x;
+    *y = last_y;
+    return true;
+}
+#else
+#define touch_sample_held touch_sample
+#endif
+
 static void touchSamplerTask(void*) {
     for (;;) {
         int32_t x, y;
-        if (touch_sample(&x, &y)) {
+        if (touch_sample_held(&x, &y)) {
             t_x = x;
             t_y = y;
             if (!t_down) {
@@ -173,6 +236,18 @@ bool touch_take_wake_request(void) {
     t_wake = false;
     return true;
 }
+
+#if UI_DEBUG_TAP
+// Bench-only: a serial "tap x y" lands here as if a finger had touched and
+// lifted between two LVGL polls - the same latched path a quick real tap takes.
+void touch_inject_tap(int32_t x, int32_t y) {
+    t_x = x;
+    t_y = y;
+    last_touch_time = millis();
+    t_wake = true;
+    t_pending = true;
+}
+#endif
 
 void touch_read(lv_indev_t *indev_drv, lv_indev_data_t *data) {
     // t_pending covers the case this whole driver exists for: the tap started

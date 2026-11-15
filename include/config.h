@@ -97,13 +97,73 @@
 #define SCREEN_SIZE 4                   // default to 4" if no build flag is set
 #endif
 
-#if SCREEN_SIZE == 4
+// UI_PORTRAIT=1 builds the 4" for an upright mount (platformio.ini,
+// esp32_4inch_portrait). LVGL then draws at the panel's own 480x800, with no
+// rotation in the flush path or the touch path.
+#ifndef UI_PORTRAIT
+#define UI_PORTRAIT 0
+#endif
+
+// Bench builds only (PLATFORMIO_BUILD_FLAGS=-DUI_DEBUG_TAP=1): serial "tap x y"
+// and "clock" commands drive the UI for screenshot tours. Never in a release.
+#ifndef UI_DEBUG_TAP
+#define UI_DEBUG_TAP 0
+#endif
+
+// UI_SQUARE=1 builds the square 480x480 panel (platformio.ini, esp32s3_square):
+// a different board on a different chip (ESP32-S3, RGB panel, no HW JPEG) with
+// its own, simpler UI under src/square/. It shares the Sonos/SMAPI core only.
+#ifndef UI_SQUARE
+#define UI_SQUARE 0
+#endif
+
+// UI_KIDS=1 builds the new, kid-friendly UI (src/square/: one colour per
+// destination, big buttons, Spotify search, Sonos favourites). The square S3
+// panel always uses it; the P4 portrait panel can too (esp32_4inch_kids).
+// UI_SQUARE stays about the S3 HARDWARE; UI_KIDS is about the UI.
+#ifndef UI_KIDS
+#define UI_KIDS UI_SQUARE
+#endif
+
+#if UI_SQUARE
+    // GUITION ESP32-4848S040 "86 box" — ESP32-S3R8, ST7701S over a 16-bit RGB
+    // bus, initialised through a 3-wire (9-bit) SPI that is only used at boot.
+    // Pins and init sequence: Arduino_GFX's ESP32_4848S040_86BOX_GUITION
+    // (st7701_type9_init_operations), which is what this board ships against.
+    #define DISPLAY_WIDTH       480
+    #define DISPLAY_HEIGHT      480
+    #define PANEL_WIDTH         480
+    #define PANEL_HEIGHT        480
+    #define DISPLAY_MODEL       "ST7701S 4\" (480x480)"
+    #define PANEL_SIZE_LABEL    "4\""
+    #define BRIGHTNESS_DIM_MIN  1
+    #define LCD_BACKLIGHT       38
+    #define LCD_SPI_CS          39
+    #define LCD_SPI_SCK         48
+    #define LCD_SPI_MOSI        47
+    #define LCD_PIN_DE          18
+    #define LCD_PIN_VSYNC       17
+    #define LCD_PIN_HSYNC       16
+    #define LCD_PIN_PCLK        21
+    #define TOUCH_GT911_SDA     19
+    #define TOUCH_GT911_SCL     45
+    #define TOUCH_GT911_INT     -1
+    #define TOUCH_GT911_RST     -1
+    #define TOUCH_PANEL_WIDTH   480
+    #define TOUCH_PANEL_HEIGHT  480
+#elif SCREEN_SIZE == 4
     // GUITION JC4880P443C — ST7701 MIPI DSI
+  #if UI_PORTRAIT
+    #define DISPLAY_WIDTH       480     // LVGL width (portrait = panel native)
+    #define DISPLAY_HEIGHT      800     // LVGL height (portrait = panel native)
+    #define DISPLAY_MODEL       "ST7701 4\" (480x800)"
+  #else
     #define DISPLAY_WIDTH       800     // LVGL width (landscape)
     #define DISPLAY_HEIGHT      480     // LVGL height (landscape)
+    #define DISPLAY_MODEL       "ST7701 4\" (800x480)"
+  #endif
     #define PANEL_WIDTH         480     // Physical panel width (portrait)
     #define PANEL_HEIGHT        800     // Physical panel height (portrait)
-    #define DISPLAY_MODEL       "ST7701 4\" (800x480)"
     #define PANEL_SIZE_LABEL    "4\""   // short form for the settings rail / boot footer
     // Lowest "Dimmed brightness" (issue #172). The ST7701 backlight is 10-bit,
     // so 1% is a real step: still lit, and clearly darker than 5% on a
@@ -117,6 +177,9 @@
     #define TOUCH_PANEL_WIDTH   480     // Touch panel native width (portrait)
     #define TOUCH_PANEL_HEIGHT  800     // Touch panel native height (portrait)
 #elif SCREEN_SIZE == 7
+  #if UI_PORTRAIT
+    #error "UI_PORTRAIT is 4\"-only for now: the 7\" JD9165 is a landscape panel and has no rotate path yet"
+  #endif
     // GUITION JC1060P470C — JD9165 MIPI DSI, native 1024x600 LANDSCAPE.
     // Unlike the 4" ST7701 (portrait panel rotated 90°), the JD9165 is wired
     // landscape, so the flush path does NOT rotate (PANEL_* == DISPLAY_*).
@@ -381,7 +444,32 @@
 // because which of those two dominates decides the fix. If the rotate
 // dominates, PPA is the answer. If the transfer dominates, PPA changes nothing
 // and partial render mode is the answer.
+#ifndef DISPLAY_PERF_TRACE
 #define DISPLAY_PERF_TRACE      0
+#endif
+
+// ── Partial render (4" only) ────────────────────────────────────────────────
+// 1: LVGL redraws only what changed (DIRECT mode, one landscape buffer) and the
+//    PPA rotates each changed area straight into the panel's frame buffer.
+// 0: the previous path - full 800x480 redraw, full-frame rotate into a staging
+//    buffer, then a DMA2D copy of all 750KB to the panel, every frame.
+// The full-frame path moved 1.5MB of PSRAM per frame whatever changed (see the
+// trace note above); this moves only the changed pixels. The 7" panel is
+// native landscape and is unaffected.
+//
+// Measured on the bench (DISPLAY_PERF_TRACE=1), scrolling a service list:
+//   full frame : 50ms/frame (render 35 + rotate/push 15), 384,000 px, 14fps
+//   partial    : 20ms/frame (render 13 + rotate/push 7.5), ~165,000 px, 30fps
+// and on the idle player (progress bar, lyric line) 60ms -> 2.5ms per frame.
+// The 30fps also needs LVGL on real time - see lv_tick_set_cb in main.cpp.
+#ifndef DISPLAY_PARTIAL_RENDER
+#define DISPLAY_PARTIAL_RENDER  1
+#endif
+// Portrait only has a partial-render flush (display_driver.cpp): the legacy
+// full-frame path is built around its rotate buffer.
+#if UI_PORTRAIT && !DISPLAY_PARTIAL_RENDER
+#error "UI_PORTRAIT needs DISPLAY_PARTIAL_RENDER=1"
+#endif
 
 
 // =============================================================================
@@ -582,8 +670,16 @@
 // + UPnP NOTIFY events) overflows it → C6 asserts sdio_push_data_to_queue:928
 // → SDIO host spins in tight register-poll loop → Interrupt WDT on CPU0.
 // All values below are calibrated for this hardware. Do NOT reduce without testing.
+#if UI_SQUARE
+#define SDIO_GENERAL_COOLDOWN_MS 0   // ESP32-S3: on-chip radio, no SDIO link to protect
+#else
 #define SDIO_GENERAL_COOLDOWN_MS      200   // Min gap between any two network operations
+#endif
+#if UI_SQUARE
+#define SDIO_HTTPS_COOLDOWN_MS 0   // ESP32-S3: on-chip radio, no SDIO link to protect
+#else
 #define SDIO_HTTPS_COOLDOWN_MS       3000   // TLS teardown residue — 2000ms insufficient (DMA AES alloc failure)
+#endif
 #define SDIO_STORM_COOLDOWN_MS       3000   // HTTP-500 storm settle (HLS source transition)
 #define SDIO_TRACK_CHANGE_SETTLE_MS     0   // Disabled: Sonos lib is pure SOAP-polling (no UPnP subscriptions,
                                             // no WiFiServer, no NOTIFY events). Long idle → C6 power-save → crash.
@@ -592,8 +688,16 @@
                                             // (total 4000ms idle) crashes. Kept at 0 for the record: this comment
                                             // is the only place that finding is written down. Nothing reads it.
 #define SDIO_TCP_CLOSE_MS             200   // TCP FIN-ACK drain after http.end() (non-TLS)
+#if UI_SQUARE
+#define SDIO_HTTPS_TCP_CLOSE_MS 0   // ESP32-S3: on-chip radio, no SDIO link to protect
+#else
 #define SDIO_HTTPS_TCP_CLOSE_MS       500   // TCP FIN-ACK drain after http.end() (TLS)
+#endif
+#if UI_SQUARE
+#define SDIO_INTER_DOWNLOAD_MS 0   // ESP32-S3: on-chip radio, no SDIO link to protect
+#else
 #define SDIO_INTER_DOWNLOAD_MS       1000   // Min gap between consecutive art/BG downloads
+#endif
 #define ART_TCP_RCVBUF               4096   // TCP SO_RCVBUF for art HTTP socket. Controls app-layer recv
                                             // buffer size (conn->recv_bufsize). Does NOT directly control
                                             // TCP window advertisement (pcb->rcv_wnd). The TCP window
@@ -634,8 +738,43 @@
                                             // if WiFi dynamic RX buffers allocate ~15KB after dl-start passes, this
                                             // catches the resulting DMA drop before it hits the crash floor (~6-7KB).
                                             // Confirmed crash floor: 6744 bytes. 8KB = 6744 + ~1.3KB safety margin.
+#define ART_READ_STALL_MS            8000   // Abort an art download that delivers nothing for this long
+                                            // while the peer keeps the socket open (it holds network_mutex)
+#if UI_SQUARE
+#define SDIO_QUEUE_POLL_COOLDOWN_MS 0   // ESP32-S3: on-chip radio, no SDIO link to protect
+#else
 #define SDIO_QUEUE_POLL_COOLDOWN_MS  3000   // After updateQueue() 20KB Browse response residue (was 2000, too short)
+#endif
 #define SDIO_POST_QUEUE_DRAIN_MS     1000   // Polling task: drain Browse response before next cycle
+
+// Music services (src/music_services.cpp) — browsing Spotify & co. over SMAPI.
+// The HTTPS path is the lyrics one (same DMA floor, same cooldowns); the event
+// capture is a one-shot UPnP subscription held under network_mutex.
+#define SVC_TASK_STACK              12288   // PSRAM. TLS handshake + std::string parsing of a 50-item page
+#define SVC_TASK_PRIORITY               1   // Same as lyrics: never preempts the Sonos tasks
+#if UI_SQUARE
+#define SVC_MIN_FREE_DMA 16000   // S3: mbedTLS buffers are in PSRAM (main_square.cpp); only lwIP needs internal RAM
+#else
+#define SVC_MIN_FREE_DMA            LYRICS_MIN_FREE_DMA  // same mbedTLS AES floor as lyrics
+#endif
+#define SVC_HTTP_TIMEOUT_MS         10000   // per read. network_mutex is held throughout, so keep it short
+#define SVC_CONNECT_TIMEOUT_MS       8000   // TCP connect
+#define SVC_HANDSHAKE_TIMEOUT_S        10   // TLS handshake. The library default is 120s - a stalled
+                                            // handshake held network_mutex for 100s+ on the bench
+#define SVC_MAX_BODY_BYTES     (256 * 1024) // a 50-item getMetadata page is ~20-60KB
+#define SVC_EVENT_PORT               3480   // our UPnP callback port, open only during the capture
+#define SVC_EVENT_WAIT_MS            6000   // how long to wait for the initial NOTIFY
+#define SVC_EVENT_MAX_BYTES    (512 * 1024) // ZoneGroupTopology NOTIFY carries the whole ZoneGroupState
+#define SVC_KEEPALIVE_MS            20000   // close the kept TLS session after this long unused
+#define SVC_KEEPALIVE_TICK_MS         500   // how often the worker checks it while open
+#if UI_SQUARE
+#define SVC_KEEPALIVE_MIN_DMA 16000   // S3: mbedTLS buffers are in PSRAM (main_square.cpp); only lwIP needs internal RAM
+#else
+#define SVC_KEEPALIVE_MIN_DMA       64000   // ...or as soon as free DMA falls under this (= CLOCK_BG_MIN_DMA)
+#endif
+#define SVC_PAGE_SIZE                  25   // items per getMetadata page. Providers build pages slowly
+                                            // (Pocket Casts: 15s for 50) and network_mutex is held meanwhile
+#define SVC_ART_WAIT_TIMEOUT_MS      8000   // wait for an in-flight art download before our TLS burst
 
 // Lyrics-specific
 #define LYRICS_ART_WAIT_TIMEOUT_MS  15000   // Max wait for art_download_in_progress to clear (storm cooldown 3000ms + download ~2000ms + margin)
