@@ -10,6 +10,8 @@ static lv_obj_t* s_svc_sub;
 static lv_obj_t* s_spk_sub;
 static lv_obj_t* s_fav_sub;
 static lv_obj_t* s_wifi_sub;
+static lv_obj_t* s_sleep_sub;
+static lv_obj_t* s_ota_sub;
 
 static lv_obj_t* card(lv_obj_t* parent, const char* icon, uint32_t color, const char* title,
                       lv_obj_t** sub_out) {
@@ -62,11 +64,22 @@ static void svcRefresh(lv_event_t*) { sqWorkPost(SQ_JOB_SVC_REFRESH); sqToast("J
 static void spkRefresh(lv_event_t*) { sqWorkPost(SQ_JOB_DISCOVER); sqToast("Je cherche les enceintes…"); }
 static void favRefresh(lv_event_t*) { sqWorkPost(SQ_JOB_FAVS_LOAD); sqToast("Je relis les favoris…"); }
 static void wifiOpen(lv_event_t*) { sqWifiOpen(); }
+static void sleepOpen(lv_event_t*) { sqShow(SQ_SCR_SLEEP); }
+static void otaOpen(lv_event_t*) { sqShow(SQ_SCR_UPDATE); }
+
+// A card that opens another screen: the whole card is the button.
+static void linkCard(lv_obj_t* c, lv_event_cb_t cb) {
+    lv_obj_set_clickable(c, true);
+    sqPressFeedback(c);
+    lv_obj_t* go = sqIcon(c, IC_RIGHT, &font_sqi_26, SQ_MUTED);
+    lv_obj_align(go, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_add_event_cb(c, cb, LV_EVENT_CLICKED, nullptr);
+}
 
 static void brightnessChanged(lv_event_t* e) {
     lv_obj_t* sl = (lv_obj_t*)lv_event_get_target(e);
     brightness_level = lv_slider_get_value(sl);
-    display_set_brightness(brightness_level);
+    sqSleepBrightnessChanged();
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) wifiPrefs.putInt(NVS_KEY_BRIGHTNESS, brightness_level);
 }
 
@@ -114,6 +127,11 @@ void sqSettingsCreate(void) {
     lv_obj_add_event_cb(sl, brightnessChanged, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(sl, brightnessChanged, LV_EVENT_RELEASED, nullptr);
 
+    c = card(list, IC_MOON, SQ_LILAC, "Veille", &s_sleep_sub);
+    linkCard(c, sleepOpen);
+    c = card(list, IC_DOWNLOAD, SQ_ORANGE, "Mise à jour", &s_ota_sub);
+    linkCard(c, otaOpen);
+
     lv_obj_t* v = sqLabel(list, "SonosESP carré · " FIRMWARE_VERSION, &font_sq_14, SQ_MUTED);
     lv_obj_set_width(v, LV_PCT(100));
     lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_CENTER, 0);
@@ -140,6 +158,11 @@ void sqSettingsRefresh(void) {
         lv_label_set_text_fmt(s_wifi_sub, "%s · %d dBm", WiFi.SSID().c_str(), (int)WiFi.RSSI());
     else
         lv_label_set_text(s_wifi_sub, "Non connecté");
+    char buf[96];
+    sqSleepSummary(buf, sizeof(buf));
+    lv_label_set_text(s_sleep_sub, buf);
+    sqOtaSummary(buf, sizeof(buf));
+    lv_label_set_text(s_ota_sub, buf);
 }
 
 // ── Wi-Fi ───────────────────────────────────────────────────────────────────

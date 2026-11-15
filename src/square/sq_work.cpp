@@ -9,6 +9,7 @@ volatile uint32_t sq_favs_version  = 0;
 volatile uint32_t sq_rooms_version = 0;
 volatile uint32_t sq_svc_version   = 0;
 volatile bool     sq_sonos_ready   = false;
+volatile bool     sq_favs_from_speaker = false;
 char              sq_current_fav_uri[256] = "";
 
 static QueueHandle_t     s_jobs   = nullptr;
@@ -181,6 +182,17 @@ static void favsLoadFromSpeaker(void) {
     int n = favsParse(didl);
     Serial.printf("[SQ/FAV] %d favourite(s) from the speaker\n", n);
     fsWrite(FAVS_FILE, didl);
+    if (n >= 0) {
+        // Covers kept in flash for favourites that are gone: delete them.
+        uint32_t keys[MAX_FAVS];
+        int k = 0;
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        for (int i = 0; i < s_fav_count; ++i)
+            if (s_favs[i].art[0]) keys[k++] = sqArtKey(s_favs[i].art, SQ_FAV_ART_PX);
+        xSemaphoreGive(s_lock);
+        sqArtPrune(keys, k);
+    }
+    sq_favs_from_speaker = true;
 }
 
 static void favPlay(int index) {
@@ -433,6 +445,7 @@ static void workerTask(void*) {
             case SQ_JOB_SELECT_ROOM:    selectRoom(job.a); break;
             case SQ_JOB_TOGGLE_GROUP:   toggleGroup(job.a); break;
             case SQ_JOB_GROUP_ALL:      groupAll(); break;
+            case SQ_JOB_OTA_CHECK:      sqOtaCheckNow(); break;
         }
         if (job.item) heap_caps_free(job.item);
         Serial.printf("[SQ/JOB] %d done in %lums\n", (int)job.type, (unsigned long)(millis() - job_t0));

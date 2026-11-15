@@ -27,6 +27,7 @@ enum SqJobType {
     SQ_JOB_SELECT_ROOM,      // a = device index
     SQ_JOB_TOGGLE_GROUP,     // a = device index (join the current room / leave)
     SQ_JOB_GROUP_ALL,
+    SQ_JOB_OTA_CHECK,        // look for a newer firmware on GitHub (sq_ota.cpp)
 };
 
 struct SqJob {
@@ -48,6 +49,7 @@ extern volatile uint32_t sq_favs_version;
 extern volatile uint32_t sq_rooms_version;
 extern volatile uint32_t sq_svc_version;
 extern volatile bool     sq_sonos_ready;
+extern volatile bool     sq_favs_from_speaker;   // the speaker answered FV:2 at least once
 
 // ── Favourites store ────────────────────────────────────────────────────────
 struct SqFav {
@@ -79,6 +81,32 @@ void sqSpotifyChoose(int serial);
 const lv_image_dsc_t* sqArtGet(const char* url, int size);
 extern volatile uint32_t sq_art_version;   // bumps whenever an image lands
 void sqArtStart(void);
+// The same, and the picture is also kept in flash (the favourites' covers), so
+// it is there at the next boot without a download.
+const lv_image_dsc_t* sqArtGetKept(const char* url, int size);
+bool     sqArtStored(const char* url, int size);   // in flash already
+bool     sqArtFlashReady(void);                    // flash copies listed
+uint32_t sqArtKey(const char* url, int size);
+// Deletes the flash copies whose key is not in `keep`.
+void     sqArtPrune(const uint32_t* keep, int n);
+#define SQ_FAV_ART_PX 136   // the size the Favoris tiles show covers at
+
+// ── Firmware updates (sq_ota.cpp) ───────────────────────────────────────────
+enum SqOtaState {
+    SQ_OTA_IDLE,
+    SQ_OTA_CHECKING,
+    SQ_OTA_UP_TO_DATE,
+    SQ_OTA_AVAILABLE,
+    SQ_OTA_NO_ASSET,     // a newer release, without a build for this panel
+    SQ_OTA_FAILED,
+};
+extern volatile uint32_t sq_ota_version;
+SqOtaState  sqOtaState(void);
+const char* sqOtaLatest(void);
+void        sqOtaCheckNow(void);      // worker task
+bool        sqOtaBootPending(void);
+void        sqOtaRunAtBoot(void);     // from setup(); never returns
+void        sqOtaSummary(char* out, size_t n);
 
 // ── Lyrics (sq_lyrics.cpp) ──────────────────────────────────────────────────
 // LRCLIB lyrics for what is playing. The player calls sqLyricsWant() on every

@@ -114,6 +114,9 @@ enum SqScreen {
     SQ_SCR_SETTINGS,
     SQ_SCR_WIFI,
     SQ_SCR_LYRICS,
+    SQ_SCR_SLEEP,       // Veille (from Réglages)
+    SQ_SCR_UPDATE,      // Mise à jour (from Réglages)
+    SQ_SCR_SETUP,       // Premier démarrage
     SQ_SCR_COUNT
 };
 
@@ -188,6 +191,28 @@ void sqSettingsCreate(void);
 void sqWifiCreate(void);
 void sqWifiOpen(void);
 void sqUiPoll(void);                // per-loop: mailboxes from worker tasks
+
+// ── Veille (sq_sleep.cpp) ───────────────────────────────────────────────────
+void sqSleepLoad(void);             // settings from NVS, at boot
+void sqSleepCreate(void);
+void sqSleepOnShow(void);
+void sqSleepOnTouch(void);          // a new finger: wake the screen
+void sqSleepTick(void);             // every loop: dim after the delay
+void sqSleepBrightnessChanged(void);
+void sqSleepSummary(char* out, size_t n);
+bool sqNightNow(void);
+
+// ── Mise à jour (sq_ota.cpp) ────────────────────────────────────────────────
+void sqOtaCreate(void);
+void sqOtaOnShow(void);
+void sqOtaRefresh(void);
+
+// ── Premier démarrage (sq_setup.cpp) ────────────────────────────────────────
+bool sqSetupNeeded(void);
+void sqSetupMarkDone(void);
+void sqSetupCreate(void);
+void sqSetupOnShow(void);
+void sqSetupTick(void);
 
 // ── SMAPI item rows (sq_items.cpp) — results, playlists, albums ───────────
 struct SqItemRow {
