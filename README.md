@@ -39,9 +39,25 @@ It adds:
   upstream ones, and every release carries an image for each of the builds above.
   See [OTA updates](#ota-updates)
 
+**Square 4″ panel (ESP32-S3, 480×480)** — player, Sonos favourites,
+streaming-service search, Spotify browsing:
+
+![The kids UI on the square 4-inch ESP32-S3 panel: player, favourites, search results and a Spotify artist list](docs/public/shots/square-tour.png)
+
+**Upright 4″ P4 panel (480×800), same kids UI** — player, favourites, search with ideas
+for children, room picker, Spotify home:
+
+![The kids UI on the upright 4-inch ESP32-P4 panel: player, favourites, Spotify search, room picker and Spotify home](docs/public/shots/kids-p4-tour.png)
+
+<sub>Real screenshots, read from the panels' frame buffers over serial.</sub>
+
 What is still missing on the square and kids builds is tracked in
 [docs/todos.md](docs/todos.md). Bugs in the shared code belong
 [upstream](https://github.com/OpenSurface/SonosESP/issues).
+
+---
+
+The regular UI, on the landscape 4″ P4 panel:
 
 ![SonosESP running on a GUITION ESP32-P4 touchscreen, showing album art and playback controls](docs/public/sonosESP.gif)
 
