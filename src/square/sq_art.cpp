@@ -151,7 +151,7 @@ static void slotFill(ArtSlot& s, uint16_t* px, int size) {
     s.dsc.header.w = size;
     s.dsc.header.h = size;
     s.dsc.header.stride = size * 2;
-    s.dsc.data = (const uint8_t*)px;
+    s.dsc.data = reinterpret_cast<const uint8_t*>(px);
     s.dsc.data_size = size * size * 2;
     s.state = ArtSlot::READY;
 }
@@ -560,9 +560,9 @@ static void fsLoad(FsReq& r) {
     if (f) {
         uint16_t hdr[2] = {0, 0};
         const size_t bytes = (size_t)r.size * r.size * 2;
-        if (f.read((uint8_t*)hdr, 4) == 4 && hdr[0] == r.size && hdr[1] == 0x565 && (size_t)f.size() == bytes + 4) {
+        if (f.read(reinterpret_cast<uint8_t*>(hdr), 4) == 4 && hdr[0] == r.size && hdr[1] == 0x565 && (size_t)f.size() == bytes + 4) {
             px = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
-            if (px && f.read((uint8_t*)px, bytes) != bytes) { heap_caps_free(px); px = nullptr; }
+            if (px && f.read(reinterpret_cast<uint8_t*>(px), bytes) != bytes) { heap_caps_free(px); px = nullptr; }
         }
         f.close();
     }
@@ -615,7 +615,8 @@ static void fsSave(FsReq& r) {
     File f = LittleFS.open(path, "w");
     if (!f) return;
     const uint16_t hdr[2] = {(uint16_t)r.size, 0x565};
-    bool ok = f.write((const uint8_t*)hdr, 4) == 4 && f.write((const uint8_t*)r.px, bytes) == bytes;
+    bool ok = f.write(reinterpret_cast<const uint8_t*>(hdr), 4) == 4 &&
+              f.write(reinterpret_cast<const uint8_t*>(r.px), bytes) == bytes;
     f.close();
     if (!ok) { LittleFS.remove(path); return; }
     xSemaphoreTake(s_lock, portMAX_DELAY);

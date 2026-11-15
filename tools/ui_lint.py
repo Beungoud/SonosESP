@@ -41,6 +41,12 @@ GEOMETRY_CALLS = [
     'lv_obj_align', 'lv_obj_align_to',
 ]
 
+# The kids UI (UI_KIDS builds: the square S3 panel and the P4 portrait) is laid
+# out in its own 480px-wide coordinates (SQ_W/SQ_H in src/square/sq_ui.h) and is
+# never built for the 7in panel. SX()/SY() scale from the 800px design of the
+# P4 UI, so wrapping these numbers in them would shrink every screen.
+GEOMETRY_SKIP_DIRS = [os.path.normpath('src/square')]
+
 # Numbers that are fine unscaled anywhere: identity/zero, and the 1-2px hairlines
 # used for borders and underlines that should NOT scale.
 GEOMETRY_EXEMPT = {'0', '1', '2', '-1', '-2'}
@@ -110,6 +116,8 @@ def check_colours(findings, palette):
 def check_geometry(findings):
     call_re = re.compile(r'\b(' + '|'.join(GEOMETRY_CALLS) + r')\s*\(')
     for path in source_files():
+        if any(path.startswith(d + os.sep) for d in GEOMETRY_SKIP_DIRS):
+            continue
         with open(path, encoding='utf-8', errors='replace') as fh:
             for n, raw in enumerate(fh, 1):
                 line = strip_comment(raw)
@@ -119,7 +127,7 @@ def check_geometry(findings):
                 args = line[m.end():]
                 # Drop anything already wrapped in a scaling macro or a percentage.
                 cleaned = re.sub(r'\b(SX|SY|SMIN|SETTINGS_LIST_H|SETTINGS_ROOT_LIST_H)\s*\([^)]*\)', '', args)
-                cleaned = re.sub(r'lv_pct\s*\([^)]*\)', '', cleaned)
+                cleaned = re.sub(r'(lv_pct|LV_PCT)\s*\([^)]*\)', '', cleaned)
                 cleaned = re.sub(r'LV_(SIZE_CONTENT|PCT|ALIGN_[A-Z_]+)', '', cleaned)
                 bare = [t for t in re.findall(r'(?<![\w.])(-?\d+)(?![\w.])', cleaned)
                         if t not in GEOMETRY_EXEMPT]

@@ -184,7 +184,7 @@ static void favsLoadFromSpeaker(void) {
     fsWrite(FAVS_FILE, didl);
     if (n >= 0) {
         // Covers kept in flash for favourites that are gone: delete them.
-        uint32_t keys[MAX_FAVS];
+        uint32_t keys[MAX_FAVS] = {};
         int k = 0;
         xSemaphoreTake(s_lock, portMAX_DELAY);
         for (int i = 0; i < s_fav_count; ++i)

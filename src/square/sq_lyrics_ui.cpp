@@ -389,7 +389,7 @@ void sqLyricsCreate(void) {
     s_play_btn = sqRoundButton(foot, 56, SQ_PINK, IC_PAUSE, &font_sqi_32, SQ_INK);
     lv_obj_set_style_shadow_width(s_play_btn, 0, 0);
     lv_obj_set_style_shadow_offset_y(s_play_btn, 4, 0);
-    lv_obj_set_style_shadow_color(s_play_btn, lv_color_hex(0xB84A80), 0);
+    lv_obj_set_style_shadow_color(s_play_btn, lv_color_hex(SQ_PINK_GLOW), 0);
     lv_obj_set_style_shadow_opa(s_play_btn, LV_OPA_COVER, 0);
     s_play_icon = lv_obj_get_child(s_play_btn, 0);
     lv_obj_add_event_cb(s_play_btn, playClicked, LV_EVENT_CLICKED, nullptr);

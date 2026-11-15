@@ -198,7 +198,7 @@ static void buildSquare(void) {
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_shadow_offset_y(b, 6, 0);
     lv_obj_set_style_shadow_spread(b, 0, 0);
-    lv_obj_set_style_shadow_color(b, lv_color_hex(0xB84A80), 0);
+    lv_obj_set_style_shadow_color(b, lv_color_hex(SQ_PINK_GLOW), 0);
     lv_obj_set_style_shadow_opa(b, LV_OPA_COVER, 0);
     s_play_icon = lv_obj_get_child(b, 0);
     lv_obj_add_event_cb(b, playClicked, LV_EVENT_CLICKED, nullptr);
@@ -295,7 +295,7 @@ static void buildTall(void) {
     b = sqRoundButton(ctl, 100, SQ_PINK, IC_PLAY, &font_sqi_44, SQ_INK);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_shadow_offset_y(b, 7, 0);
-    lv_obj_set_style_shadow_color(b, lv_color_hex(0xB84A80), 0);
+    lv_obj_set_style_shadow_color(b, lv_color_hex(SQ_PINK_GLOW), 0);
     lv_obj_set_style_shadow_opa(b, LV_OPA_COVER, 0);
     s_play_icon = lv_obj_get_child(b, 0);
     lv_obj_add_event_cb(b, playClicked, LV_EVENT_CLICKED, nullptr);
